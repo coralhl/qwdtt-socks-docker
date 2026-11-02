@@ -40,15 +40,36 @@ type statusInfo struct {
 }
 
 var (
-	mu         sync.Mutex
-	status     statusInfo
-	logRing    []string
-	args       []string
-	clientPath string
+	mu           sync.Mutex
+	status       statusInfo
+	logRing      []string
+	args         []string
+	clientPath   string
+	shuttingDown bool
 
 	child      *exec.Cmd
 	childStdin io.WriteCloser
 )
+
+// notify runs the notifier script (NOTIFY_CMD, default /usr/local/bin/notify)
+// with the message as its argument. NOTIFY_CMD=none disables notifications.
+// The script itself chooses the backend (ntfy / Telegram / Gotify / ...), so the
+// delivery method can be changed without touching statusd.
+func notify(msg string) {
+	cmd := os.Getenv("NOTIFY_CMD")
+	if cmd == "none" {
+		return
+	}
+	if cmd == "" {
+		cmd = "/usr/local/bin/notify"
+	}
+	c := exec.Command(cmd, msg)
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	if err := c.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "statusd: notify:", err)
+	}
+}
 
 var patterns = []struct {
 	re    *regexp.Regexp
@@ -70,16 +91,24 @@ var patterns = []struct {
 func handleLine(line string) {
 	fmt.Println(line) // keep the container log as it was
 	mu.Lock()
-	defer mu.Unlock()
 	logRing = append(logRing, line)
 	if len(logRing) > maxLogLines {
 		logRing = logRing[len(logRing)-maxLogLines:]
 	}
+	var msg string
 	for _, p := range patterns {
 		if m := p.re.FindStringSubmatch(line); m != nil {
+			wasUp := status.ProxyUp
 			p.apply(m)
-			return
+			if !wasUp && status.ProxyUp {
+				msg = fmt.Sprintf("qwdtt-socks: proxy is up (peer %s)", status.Peer)
+			}
+			break
 		}
+	}
+	mu.Unlock()
+	if msg != "" {
+		notify(msg)
 	}
 }
 
@@ -136,8 +165,12 @@ func startClient() {
 		status.Running = false
 		status.Paused = false
 		status.ExitCode = child.ProcessState.ExitCode()
+		shut := shuttingDown
 		mu.Unlock()
 		fmt.Printf("statusd: client exited (%d)\n", status.ExitCode)
+		if !shut {
+			notify(fmt.Sprintf("qwdtt-socks: proxy is down (exit %d)", status.ExitCode))
+		}
 	}()
 }
 
@@ -326,6 +359,7 @@ func main() {
 
 	<-sig
 	mu.Lock()
+	shuttingDown = true
 	if status.Running {
 		_, _ = io.WriteString(childStdin, "STOP\n")
 	}

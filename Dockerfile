@@ -17,11 +17,13 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -X 
 # Writable work directory for the unprivileged runtime user.
 RUN mkdir -p /out/work && chown 65534:65534 /out/work
 
-FROM scratch
-COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+# Runtime stage: alpine so the notifier script can run (sh + curl).
+FROM alpine:3.22
+RUN apk add --no-cache ca-certificates curl
 COPY --from=build /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=build /out/qwdtt-client /qwdtt-client
 COPY --from=build /out/statusd /statusd
+COPY --chmod=0755 notify.sh /usr/local/bin/notify
 COPY --from=build --chown=65534:65534 /out/work /work
 WORKDIR /work
 USER 65534

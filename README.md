@@ -49,7 +49,29 @@ GitHub Actions (`.github/workflows/build.yml`) собирает образ и п
 `docker logs` продолжает работать как раньше — statusd печатает вывод клиента
 в stdout контейнера. PAUSE/RESUME/STOP в stdin тоже пробрасываются клиенту.
 
+## Уведомления
+
+При падении и подъёме прокси statusd вызывает скрипт `/usr/local/bin/notify`
+(в образе — `notify.sh`) с текстом сообщения как аргументом. Скрипт выбирает
+первый настроенный бэкенд:
+
+- ntfy: `NTFY_URL` (+ `NTFY_TOKEN`)
+- Telegram: `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`
+- Gotify: `GOTIFY_URL` + `GOTIFY_TOKEN`
+
+Значения берутся из `.env` (файл не коммитится). Чтобы использовать другой сервис,
+достаточно добавить блок в `notify.sh` или подменить сам скрипт — statusd к нему не
+привязан. `NOTIFY_CMD=none` отключает уведомления; без настроенного бэкенда
+контейнер работает как раньше, только без алертов.
+
 ## Сборка и запуск
+
+```sh
+docker pull ghcr.io/coralhl/qwdtt-socks:latest
+docker compose up -d
+```
+
+Локальная сборка нужна только если меняешь код:
 
 ```sh
 docker compose build

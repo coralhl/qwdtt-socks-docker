@@ -11,6 +11,17 @@ services:
     environment:
       # Local time in logs (Go reads TZ + /usr/share/zoneinfo baked into the image).
       TZ: Europe/Moscow
+      # Notifications: statusd calls /usr/local/bin/notify, which uses the first
+      # configured backend. Values come from .env (not committed); with no backend
+      # configured the container still runs, just no alerts.
+      # NTFY_URL / NTFY_TOKEN, or TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID,
+      # or GOTIFY_URL + GOTIFY_TOKEN. NOTIFY_CMD=none disables notifications.
+      NTFY_URL: ${NTFY_URL:-}
+      NTFY_TOKEN: ${NTFY_TOKEN:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      GOTIFY_URL: ${GOTIFY_URL:-}
+      GOTIFY_TOKEN: ${GOTIFY_TOKEN:-}
       # Main settings can be passed via environment instead of config.json.
       # The generated config is used only when the config file does not exist.
       # QWDTT_PEER: host:56000
