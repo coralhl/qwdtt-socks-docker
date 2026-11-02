@@ -1,0 +1,10 @@
+{
+  "peer": "example.com:56000",
+  "hashes": [
+    "hash1",
+    "hash2"
+  ],
+  "password": "secret",
+  "dns": "doh-google",
+  "device_id": "unknown"
+}

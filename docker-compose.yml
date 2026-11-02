@@ -1,0 +1,25 @@
+services:
+  qwdtt-socks:
+    image: ghcr.io/coralhl/qwdtt-socks:latest
+    container_name: qwdtt-socks
+    restart: unless-stopped
+    ports:
+      - "1080:1080"
+      - "8081:8080"
+    volumes:
+      - ./config.json:/config/qwdtt.json:ro
+    environment:
+      # Local time in logs (Go reads TZ + /usr/share/zoneinfo baked into the image).
+      TZ: Europe/Moscow
+      # Main settings can be passed via environment instead of config.json.
+      # The generated config is used only when the config file does not exist.
+      # QWDTT_PEER: host:56000
+      # QWDTT_HASHES: hash1,hash2
+      # QWDTT_PASSWORD: secret
+      # QWDTT_DEVICE_ID: unknown
+      # QWDTT_DNS: doh-google
+      # QWDTT_WORKERS: 9
+      # SOCKS5 auth (client flags -socks-auth/-socks-user/-socks-pass):
+      # QWDTT_SOCKS_USER: proxyuser
+      # QWDTT_SOCKS_PASS: secretpass
+    command: ["-config", "/config/qwdtt.json", "-mode", "socks", "-socks", "0.0.0.0:1080"]

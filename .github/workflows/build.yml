@@ -1,0 +1,60 @@
+name: build
+
+on:
+  push:
+  workflow_dispatch:
+  # Daily check of upstream releases; builds and re-pins when there is a new one.
+  schedule:
+    - cron: "0 10 * * *"
+  # Immediate trigger from an external hook (e.g. a webhook on upstream releases).
+  repository_dispatch:
+    types: [qwdtt-release]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine client version
+        id: ver
+        run: |
+          pinned=$(sed -n 's/^ARG QWDTT_VERSION=\(.*\)/\1/p' Dockerfile | head -1)
+          latest=$(curl -fsS https://api.github.com/repos/code2fingers/qwdtt-openwrt/releases/latest | jq -r .tag_name)
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            latest="${{ github.event.client_payload.version }}"
+          fi
+          if [ -z "$latest" ]; then
+            latest="$pinned"
+          fi
+          if [ "$latest" != "$pinned" ]; then
+            sed -i "s/^ARG QWDTT_VERSION=.*/ARG QWDTT_VERSION=$latest/" Dockerfile
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git commit -m "Dockerfile: pin client $latest"
+            git push
+            echo "updated=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$latest" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        run: |
+          docker build --build-arg QWDTT_VERSION=${{ steps.ver.outputs.version }} \
+            -t ghcr.io/coralhl/qwdtt-socks:${{ steps.ver.outputs.version }} \
+            -t ghcr.io/coralhl/qwdtt-socks:latest .
+
+      - name: Push to GHCR
+        run: |
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker push ghcr.io/coralhl/qwdtt-socks:${{ steps.ver.outputs.version }}
+          docker push ghcr.io/coralhl/qwdtt-socks:latest
+
+      - name: Notify ntfy on a new release
+        if: steps.ver.outputs.updated == 'true' && secrets.NTFY_TOKEN != ''
+        run: |
+          curl -fsS -H "Authorization: Bearer ${{ secrets.NTFY_TOKEN }}" \
+            -d "qwdtt-socks: new client release ${{ steps.ver.outputs.version }}, image ghcr.io/coralhl/qwdtt-socks:${{ steps.ver.outputs.version }}" \
+            "${{ secrets.NTFY_URL }}" >/dev/null
