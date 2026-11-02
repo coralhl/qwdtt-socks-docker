@@ -1,6 +1,6 @@
 services:
   qwdtt-socks:
-    image: ghcr.io/coralhl/qwdtt-socks-docker:latest
+    image: ghcr.io/coralhl/qwdtt-socks:latest
     container_name: qwdtt-socks
     restart: unless-stopped
     ports:

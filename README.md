@@ -23,8 +23,10 @@ docker compose build --build-arg QWDTT_VERSION=v1.3.0
 ## Отслеживание релизов и автоматическая сборка
 
 GitHub Actions (`.github/workflows/build.yml`) собирает образ и публикует на GHCR
-(`ghcr.io/coralhl/qwdtt-socks-docker`, теги `latest` и `<версия клиента>`) при пушах,
+(`ghcr.io/coralhl/qwdtt-socks`, теги `latest` и `<версия клиента>`) при пушах,
 ежедневно по cron, вручную (`workflow_dispatch`) и по событию `repository_dispatch`.
+Имя пакета на GHCR не совпадает с именем репозитория (`qwdtt-socks-docker`) — это допустимо,
+права и видимость пакета наследуются от репозитория.
 При новой версии `code2fingers/qwdtt-openwrt` workflow обновляет `ARG QWDTT_VERSION`
 в Dockerfile (коммит), собирает образ с этой версией и уведомляет в ntfy, если в
 репозитории заданы секреты `NTFY_URL` и `NTFY_TOKEN`.

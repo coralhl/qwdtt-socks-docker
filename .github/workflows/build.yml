@@ -16,6 +16,9 @@ jobs:
     permissions:
       contents: write
       packages: write
+    env:
+      NTFY_URL: ${{ secrets.NTFY_URL }}
+      NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -43,18 +46,18 @@ jobs:
       - name: Build image
         run: |
           docker build --build-arg QWDTT_VERSION=${{ steps.ver.outputs.version }} \
-            -t ghcr.io/coralhl/qwdtt-socks-docker:${{ steps.ver.outputs.version }} \
-            -t ghcr.io/coralhl/qwdtt-socks-docker:latest .
+            -t ghcr.io/coralhl/qwdtt-socks:${{ steps.ver.outputs.version }} \
+            -t ghcr.io/coralhl/qwdtt-socks:latest .
 
       - name: Push to GHCR
         run: |
           echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          docker push ghcr.io/coralhl/qwdtt-socks-docker:${{ steps.ver.outputs.version }}
-          docker push ghcr.io/coralhl/qwdtt-socks-docker:latest
+          docker push ghcr.io/coralhl/qwdtt-socks:${{ steps.ver.outputs.version }}
+          docker push ghcr.io/coralhl/qwdtt-socks:latest
 
       - name: Notify ntfy on a new release
-        if: steps.ver.outputs.updated == 'true' && secrets.NTFY_TOKEN != ''
+        if: steps.ver.outputs.updated == 'true' && env.NTFY_TOKEN != ''
         run: |
           curl -fsS -H "Authorization: Bearer ${{ secrets.NTFY_TOKEN }}" \
-            -d "qwdtt-socks: new client release ${{ steps.ver.outputs.version }}, image ghcr.io/coralhl/qwdtt-socks-docker:${{ steps.ver.outputs.version }}" \
+            -d "qwdtt-socks: new client release ${{ steps.ver.outputs.version }}, image ghcr.io/coralhl/qwdtt-socks:${{ steps.ver.outputs.version }}" \
             "${{ secrets.NTFY_URL }}" >/dev/null
