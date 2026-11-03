@@ -64,6 +64,23 @@ GitHub Actions (`.github/workflows/build.yml`) собирает образ и п
 привязан. `NOTIFY_CMD=none` отключает уведомления; без настроенного бэкенда
 контейнер работает как раньше, только без алертов.
 
+## HTTP-прокси
+
+Клиент умеет только `vpn|socks|rawtun`, поэтому HTTP-прокси добавлен в statusd:
+он слушает отдельный порт (`HTTP_PROXY_PORT`, в compose — 8082) и проксирует через
+SOCKS5-сервер клиента. Работают обычные запросы с абсолютным URI (`http://...`)
+и `CONNECT` (туннель для HTTPS); разрешение имён — на стороне SOCKS. Если заданы
+`QWDTT_SOCKS_USER`/`QWDTT_SOCKS_PASS`, они используются и здесь. Пустое значение
+`HTTP_PROXY_PORT` отключает слой, `SOCKS_UPSTREAM` меняет адрес SOCKS (по умолчанию
+`127.0.0.1:1080`).
+
+```sh
+curl -s -x http://127.0.0.1:8082 https://api.ipify.org        # через HTTP-прокси
+curl -s --socks5-hostname 127.0.0.1:1080 https://api.ipify.org # через SOCKS5
+```
+
+Порт прокси виден на странице статуса и в `/api/status` (поле `http_proxy`).
+
 ## Сборка и запуск
 
 ```sh

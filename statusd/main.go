@@ -2,9 +2,11 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -32,6 +34,7 @@ type statusInfo struct {
 	Workers       int       `json:"workers"`
 	LastError     string    `json:"last_error"`
 	ProxyUp       bool      `json:"proxy_up"`
+	HTTPProxy     string    `json:"http_proxy"`
 	Running       bool      `json:"running"`
 	Paused        bool      `json:"paused"`
 	ExitCode      int       `json:"exit_code"`
@@ -68,6 +71,181 @@ func notify(msg string) {
 	c.Stderr = os.Stderr
 	if err := c.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "statusd: notify:", err)
+	}
+}
+
+// socksConn opens a connection to target through the SOCKS5 server at proxy.
+func socksConn(proxy, user, pass, target string) (net.Conn, error) {
+	c, err := net.DialTimeout("tcp", proxy, 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := c.Write([]byte{5, 2, 0, 1}); err != nil {
+		c.Close()
+		return nil, err
+	}
+	greet := make([]byte, 2)
+	if _, err := io.ReadFull(c, greet); err != nil {
+		c.Close()
+		return nil, err
+	}
+	if greet[0] != 5 {
+		c.Close()
+		return nil, fmt.Errorf("socks: unexpected greeting version %d", greet[0])
+	}
+	if greet[1] == 2 {
+		if user == "" || pass == "" {
+			c.Close()
+			return nil, fmt.Errorf("socks: username and password required")
+		}
+		req := append([]byte{1, byte(len(user))}, user...)
+		req = append(req, byte(len(pass)))
+		req = append(req, pass...)
+		if _, err := c.Write(req); err != nil {
+			c.Close()
+			return nil, err
+		}
+		st := make([]byte, 2)
+		if _, err := io.ReadFull(c, st); err != nil {
+			c.Close()
+			return nil, err
+		}
+		if st[1] != 0 {
+			c.Close()
+			return nil, fmt.Errorf("socks: authentication failed")
+		}
+	} else if greet[1] != 0 {
+		c.Close()
+		return nil, fmt.Errorf("socks: no acceptable method (%d)", greet[1])
+	}
+
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		c.Close()
+		return nil, err
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil {
+		c.Close()
+		return nil, err
+	}
+	req := []byte{5, 1, 0}
+	if ip := net.ParseIP(host); ip != nil && ip.To4() != nil {
+		req = append(req, 1)
+		req = append(req, ip.To4()...)
+	} else {
+		req = append(req, 3, byte(len(host)))
+		req = append(req, host...)
+	}
+	req = append(req, byte(p>>8), byte(p&0xff))
+	if _, err := c.Write(req); err != nil {
+		c.Close()
+		return nil, err
+	}
+	hdr := make([]byte, 4)
+	if _, err := io.ReadFull(c, hdr); err != nil {
+		c.Close()
+		return nil, err
+	}
+	if hdr[1] != 0 {
+		c.Close()
+		return nil, fmt.Errorf("socks: connect rejected (%d)", hdr[1])
+	}
+	// Skip the bound address; the caller only needs the tunnel.
+	switch hdr[3] {
+	case 1:
+		_, _ = io.CopyN(io.Discard, c, 6)
+	case 3:
+		n := make([]byte, 1)
+		if _, err := io.ReadFull(c, n); err != nil {
+			c.Close()
+			return nil, err
+		}
+		_, _ = io.CopyN(io.Discard, c, int64(n[0])+2)
+	case 4:
+		_, _ = io.CopyN(io.Discard, c, 18)
+	}
+	return c, nil
+}
+
+// startHTTPProxy serves an HTTP proxy in front of the client's SOCKS5 server
+// (the client itself has no HTTP mode). Enabled when HTTP_PROXY_PORT is set.
+// CONNECT requests are tunneled raw; absolute-URI requests go through the SOCKS dialer.
+func startHTTPProxy() {
+	port := os.Getenv("HTTP_PROXY_PORT")
+	if port == "" {
+		return
+	}
+	upstream := os.Getenv("SOCKS_UPSTREAM") // the client's SOCKS5 address
+	if upstream == "" {
+		upstream = "127.0.0.1:1080"
+	}
+	user, pass := os.Getenv("QWDTT_SOCKS_USER"), os.Getenv("QWDTT_SOCKS_PASS")
+
+	transport := &http.Transport{
+		DialContext: func(_ context.Context, _, addr string) (net.Conn, error) {
+			return socksConn(upstream, user, pass, addr)
+		},
+	}
+	client := &http.Client{Transport: transport}
+
+	mu.Lock()
+	status.HTTPProxy = ":" + port
+	mu.Unlock()
+
+	fmt.Printf("statusd: http proxy on :%s -> socks %s\n", port, upstream)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodConnect {
+			conn, err := socksConn(upstream, user, pass, r.Host)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadGateway)
+				return
+			}
+			defer conn.Close()
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				http.Error(w, "CONNECT not supported", http.StatusInternalServerError)
+				return
+			}
+			client, _, err := hj.Hijack()
+			if err != nil {
+				return
+			}
+			defer client.Close()
+			fmt.Fprint(client, "HTTP/1.1 200 Connection Established\r\n\r\n")
+			go func() {
+				_, _ = io.Copy(conn, client)
+				conn.Close()
+			}()
+			_, _ = io.Copy(client, conn)
+			return
+		}
+		if r.URL.Scheme == "" || r.URL.Host == "" {
+			http.Error(w, "expected an absolute request URI", http.StatusBadRequest)
+			return
+		}
+		req, err := http.NewRequestWithContext(r.Context(), r.Method, r.URL.String(), r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		req.Header = r.Header.Clone()
+		resp, err := client.Do(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		for k, vs := range resp.Header {
+			for _, v := range vs {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	})
+	if err := http.ListenAndServe(":"+port, handler); err != nil {
+		fmt.Fprintln(os.Stderr, "statusd: http proxy:", err)
 	}
 }
 
@@ -354,6 +532,8 @@ func main() {
 		}
 	}()
 
+	go startHTTPProxy()
+
 	fmt.Printf("statusd: serving on :%s\n", port)
 	startClient()
 
@@ -393,6 +573,7 @@ async function refresh(){
     '<br><span class=k>mode:</span> '+(r.mode||'-')+' <span class=k>peer:</span> '+(r.peer||'-')+
     '<br><span class=k>proxy:</span> '+(r.proxy_up?'<span class=v>up</span>':'down')+
     ' <span class=k>workers:</span> '+r.workers+
+    '<br><span class=k>http proxy:</span> '+(r.http_proxy||'-')+
     '<br><span class=k>connected since:</span> '+(r.first_ready||'-')+
     '<br><span class=k>last error:</span> '+(r.last_error||'-')+'</p>';
   const l=await fetch('/api/log').then(r=>r.text());
